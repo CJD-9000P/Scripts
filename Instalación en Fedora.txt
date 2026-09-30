@@ -1,0 +1,89 @@
+sudo dnf install python3
+sudo dnf install tmux
+mkdir -p ~/cjd9000p
+cd ~/cjd9000p
+python3 -m venv venv
+source venv/bin/actívate
+el promt cambia a: 
+(venv) [usuario@asus cjd9000p]$
+python -m pip install --upgrade pip
+pip install pymodbus paho-mqtt pyserial
+python3 -c "import sys, pymodbus, paho.mqtt.client, serial, importlib.metadata as m; print('Python:', sys.executable); print('pymodbus:', 
+
+pymodbus.version); print('paho-mqtt:', m.version('paho-mqtt')); print('pyserial:', m.version('pyserial'))"
+
+tiene que dar como resultado:
+
+python3 -c "import sys, pymodbus, paho.mqtt.client, serial, importlib.metadata as m; print('Python:', sys.executable); print('pymodbus:', pymodbus.version); print('paho-mqtt:', m.version('paho-mqtt')); print('pyserial:', m.version('pyserial'))"
+
+sudo usermod -aG dialout $USER
+salir y entrar del usuario y comprobar con :
+groups
+debe dar como resultado de vuelta:
+
+usuario Wheel dialout
+
+sudo dnf config-manager --add-repo https://pkgs.tailscale.com/stable/fedora/tailscale.repo
+sudo dnf install tailscale
+
+para quitar el entorno grafico en el inicio del ordenador(OPCIONAL):
+sudo systemctl set-default multi-user.target
+
+que ejecute el script en el arranque y acceso por tmux:
+
+sudo nano /usr/local/bin/cjd-start.sh
+
+y ponemos:
+
+#!/bin/bash
+
+exec /usr/bin/tmux new-session -d -s cjd \
+    /home/carlos/cjd9000p/venv/bin/python \
+    /home/carlos/cjd9000p/main.py
+
+despues ejecutamos:
+
+sudo chmod 755 /usr/local/bin/cjd-start.sh
+
+
+
+sudo nano /etc/systemd/system/CJD-script.service
+
+alli metemos esto:
+
+[Unit]
+Description=Mi programa CJD LOGGER MQTT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=carlos
+Environment=HOME=/home/carlos
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+WorkingDirectory=/home/carlos/cjd9000p
+
+ExecStart=/usr/local/bin/cjd-start.sh
+ExecStop=-/usr/bin/tmux kill-session -t cjd
+
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl daemon-reload
+sudo systemctl enable CJD-script.service
+sudo systemctl start CJD-script.service
+
+El servicio se activa y se muestran los datos dentro de tmux, para listar:
+
+tmux ls
+
+Y para ver el contenido:
+
+tmux attach -t cjd
+
+Para hacer pruebas de lectura (opcionales) 
+sudo dnf install mosquitto
+mosquitto_sub -h 192.168.1.107 -u horno_mqtt -P prueba   -t 'horno/cjd9000p/#' -v

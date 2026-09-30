@@ -1,0 +1,503 @@
+MANUAL TÉCNICO Y DE FUNCIONAMIENTO
+CJD-9000P → Modbus RTU → MQTT → Home Assistant
+Versión 3.4.2
+
+1. INTRODUCCIÓN
+
+Este programa conecta un controlador/programador de horno CJD-9000P con MQTT y Home Assistant. La arquitectura es:
+
+CJD-9000P → RS485 → DSD TECH SH-U11F → /dev/ttyUSB0 → Python V3.4.2 → MQTT → Broker → Home Assistant
+
+El programa funciona en modo SOLO LECTURA respecto al CJD-9000P: obtiene información mediante Modbus, pero no escribe registros Modbus en el horno.
+
+2. OBJETIVOS
+
+• Conectar con el CJD-9000P mediante Modbus RTU.
+• Leer configuración y curva al arrancar.
+• Leer los 20 segmentos de la curva seleccionada.
+• Publicar configuración y curva mediante MQTT.
+• Crear entidades automáticamente mediante Home Assistant MQTT Discovery.
+• Leer PV, SV, segmento, estado y tiempo cada segundo.
+• Guardar cada lectura en CSV.
+• Publicar cada lectura mediante MQTT.
+• Detectar pérdida de comunicación.
+• Declarar el horno offline después de 3 fallos consecutivos.
+• Intentar recuperar automáticamente la comunicación cada 5 segundos.
+• Diferenciar la disponibilidad del horno de la conexión MQTT.
+• Gestionar Ctrl+C y cerrar limpiamente Modbus, MQTT y CSV.
+
+3. COMPONENTES
+
+CJD-9000P: controlador del horno.
+RS485: medio físico de comunicación.
+DSD TECH SH-U11F: adaptador USB/RS485.
+Python 3.13: programa intermediario.
+MQTT: transporte de datos por red.
+Broker MQTT: 192.168.1.107:1883.
+Home Assistant: visualización y automatización.
+
+4. CONFIGURACIÓN MODBUS
+
+PUERTO = /dev/ttyUSB0
+MODBUS_ID = 1
+BAUDRATE = 9600
+BYTESIZE = 8
+PARITY = N
+STOPBITS = 2
+MODBUS_TIMEOUT = 2 segundos
+MODBUS_RETRIES = 1
+
+Formato serie: 9600 8N2.
+
+5. REGISTROS PRINCIPALES
+
+SPC = 0xA0 → selección de curva.
+CYC = 0xA1 → ciclos.
+dP = 0xA3 → configuración decimal.
+ADDR = 0xBF.
+BAUD = 0xC0.
+STEP = 0xC9 → segmento.
+ESTADO = 0xCA → estado.
+TIEMPO = 0xCC → tiempo.
+PV = 0xCD → temperatura real.
+SV = 0xCE → consigna.
+
+6. PV, SV Y CURVA
+
+PV (Process Value) es la temperatura real medida por el horno.
+SV (Set Value) es la consigna actual aplicada por el controlador.
+La curva es el programa previsto.
+
+Ejemplo: si un segmento indica 100 °C en 10 minutos, eso no significa que SV sea 100 °C desde el primer segundo. La curva, el SV y el PV son tres conceptos distintos.
+
+CURVA → qué debería hacer el horno.
+SV → qué está ordenando ahora el controlador.
+PV → qué está ocurriendo realmente.
+
+Esta separación permite posteriormente comparar curva programada, consigna y temperatura real.
+
+7. INICIALIZACIÓN
+
+Al arrancar se conecta MQTT y se intenta conectar con el CJD-9000P. Una vez obtenida una respuesta correcta se lee la configuración mediante leer_configuracion(). Se obtiene SPC, CYC y dP.
+
+SPC determina la curva:
+1 → Curva 1
+2 → Curva 2
+3 → Curva 3
+4 → Curva 4
+
+La configuración y la curva se leen SOLO durante la inicialización y no se vuelven a leer durante la cocción ni durante una recuperación de comunicación.
+
+8. LECTURA DE LA CURVA
+
+Las posiciones de inicio son:
+Curva 1 → 0x00
+Curva 2 → 0x28
+Curva 3 → 0x50
+Curva 4 → 0x78
+
+Cada curva tiene 20 segmentos y cada segmento contiene temperatura y tiempo. Por tanto se leen 40 registros por curva.
+
+Cada segmento se representa como:
+{"segmento": 1, "temperatura": 100, "tiempo": 10}
+
+La V3.4.2 utiliza los nombres descriptivos temperatura y tiempo.
+
+9. LECTURA DINÁMICA
+
+INTERVALO_LECTURA = 1.0 segundo.
+
+Cada ciclo obtiene:
+• PV
+• SV
+• segmento
+• estado
+• tiempo CJD
+
+El programa intenta primero leer C9..CE en bloque. Interpreta:
+C9 = segmento
+CA = estado
+CB = no utilizado
+CC = tiempo
+CD = PV
+CE = SV
+
+Si el bloque no funciona utiliza un método de respaldo mediante lecturas separadas: C9..CA, CC y CD..CE.
+
+La variable bloque_dinamico_soportado recuerda si el método en bloque funciona para no probar continuamente un método que ya se sabe que falla.
+
+10. ESTADOS
+
+0 → PARADO
+1 → FUNCIONANDO
+2 → PAUSADO
+Otro valor → DESCONOCIDO
+
+11. MENSAJE DINÁMICO
+
+Cada segundo se construye un JSON similar a:
+
+{
+  "timestamp": "2026-09-25T07:33:47",
+  "pv": 54.7,
+  "sv": 150,
+  "segmento": 1,
+  "estado": 1,
+  "estado_texto": "FUNCIONANDO",
+  "tiempo_cjd": 8
+}
+
+PV y SV se publican como enteros cuando no tienen parte decimal y con un decimal cuando es necesario: 24.0 → 24; 24.5 → 24.5.
+
+12. CSV
+
+Se crea automáticamente el directorio cocciones/.
+
+Ejemplo de archivo:
+cocciones/2026-09-25_07-33-40_curva_1.csv
+
+Columnas:
+fecha;hora;PV;SV;segmento;estado;estado_texto;tiempo_CJD
+
+El archivo se escribe y se hace flush en cada ciclo, por lo que se conserva un histórico local independiente de MQTT/Home Assistant.
+
+13. MQTT
+
+Broker:
+192.168.1.107:1883
+
+Usuario:
+horno_mqtt
+
+Contraseña:
+prueba
+
+El cliente MQTT funciona de forma asíncrona.
+
+14. TOPICS MQTT
+
+horno/cjd9000p/state
+→ datos dinámicos: PV, SV, segmento, estado y tiempo. No retained.
+
+horno/cjd9000p/config
+→ configuración inicial. Retained.
+
+horno/cjd9000p/curva
+→ curva completa. Retained.
+
+horno/cjd9000p/status
+→ estado combinado de MQTT y horno. Retained.
+
+horno/cjd9000p/availability
+→ topic antiguo de compatibilidad.
+
+horno/cjd9000p/mqtt/availability
+→ topic antiguo de compatibilidad.
+
+15. ESTADO MQTT Y ESTADO DEL HORNO
+
+El topic status utiliza un JSON como:
+{"mqtt":"online","horno":"online"}
+
+mqtt = online significa que Python está conectado al broker MQTT.
+horno = online significa que Python está recibiendo correctamente respuestas del CJD-9000P.
+
+Por ejemplo:
+{"mqtt":"online","horno":"offline"}
+
+significa que MQTT funciona, pero el horno no responde.
+
+Esta separación es fundamental para Home Assistant.
+
+16. MQTT DISCOVERY
+
+La V3.4.2 publica automáticamente configuraciones de Home Assistant mediante MQTT Discovery. De esta forma no es necesario crear manualmente cada sensor en configuration.yaml.
+
+Se crean entidades para temperatura, consigna, segmento, tiempo CJD, horno disponible, MQTT conectado, funcionamiento, curva seleccionada, ciclos, dP y 20 sensores de los segmentos de curva.
+
+17. SENSORES DE CURVA
+
+Se crean:
+Curva segmento 01
+Curva segmento 02
+...
+Curva segmento 20
+
+Cada sensor representa lo programado, no la temperatura actual. Por ejemplo puede mostrar 100 °C / 10 min.
+
+18. MENSAJE DE CURVA
+
+El topic horno/cjd9000p/curva contiene una estructura como:
+
+{
+  "curva": 1,
+  "segmentos": [
+    {"segmento": 1, "temperatura": 100, "tiempo": 10},
+    {"segmento": 2, "temperatura": 200, "tiempo": 20}
+  ]
+}
+
+Continúa hasta el segmento 20.
+
+La configuración y la curva son retained; los datos dinámicos no son retained. Esto evita considerar como actuales unos datos PV/SV antiguos cuando el programa ya no está funcionando.
+
+19. DETECCIÓN DE PÉRDIDA DE COMUNICACIÓN
+
+FALLOS_ANTES_OFFLINE = 3.
+
+Los fallos consecutivos se cuentan:
+1/3 → primer fallo
+2/3 → segundo fallo
+3/3 → tercer fallo
+
+Al tercer fallo se ejecuta marcar_horno_offline() y se publica:
+{"mqtt":"online","horno":"offline"}
+
+MQTT continúa conectado, pero Home Assistant considera no disponible al horno y a las entidades que dependen de él.
+
+20. RECUPERACIÓN AUTOMÁTICA
+
+MODBUS_RECONNECT_INTERVAL = 5.0 segundos.
+
+Cuando modbus_ok pasa a False, el programa intenta reconectar cada 5 segundos. Cuando consigue una lectura dinámica válida:
+
+modbus_ok = True
+fallos_consecutivos = 0
+
+y publica:
+{"mqtt":"online","horno":"online"}
+
+La configuración y la curva no se vuelven a leer durante esta recuperación.
+
+21. LWT DE MQTT
+
+El programa utiliza Last Will and Testament. El mensaje de última voluntad es:
+
+{"mqtt":"offline","horno":"offline"}
+
+Si Python desaparece inesperadamente y el broker detecta la pérdida de la conexión MQTT, el broker puede publicar este mensaje.
+
+22. DIFERENCIA ENTRE FALLO MODBUS Y FALLO MQTT
+
+Fallo del horno:
+CJD-9000P → no responde.
+Python → sigue funcionando.
+MQTT → sigue conectado.
+Resultado: mqtt online / horno offline.
+
+Fallo de Python o MQTT:
+Python → desaparece o pierde conexión.
+Broker → detecta la pérdida.
+LWT → mqtt offline / horno offline.
+
+23. CIERRE CON CTRL+C
+
+Al pulsar Ctrl+C se produce KeyboardInterrupt. El programa lo captura y finalmente ejecuta cerrar_programa().
+
+La secuencia de cierre es:
+
+1. Publicar último estado.
+2. Publicar horno/MQTT offline.
+3. Publicar los topics antiguos offline por compatibilidad.
+4. Cerrar y vaciar el CSV.
+5. Cerrar Modbus.
+6. Parar el loop MQTT.
+7. Desconectar MQTT.
+
+24. ÚLTIMO ESTADO AL CERRAR
+
+Antes de desconectar MQTT se publica un último estado:
+
+{
+  "pv": 25,
+  "sv": 25,
+  "segmento": null,
+  "estado": 0,
+  "estado_texto": "PARADO",
+  "tiempo_cjd": null
+}
+
+Después se publica:
+{"mqtt":"offline","horno":"offline"}
+
+con QoS 1 y retain=True.
+
+La decisión actual del proyecto es aceptar que Home Assistant pase después a estado no disponible, evitando mantener indefinidamente datos antiguos en gráficas.
+
+25. FLUJO DE ARRANQUE
+
+INICIO
+ ↓
+Mostrar versión y configuración
+ ↓
+Iniciar MQTT
+ ↓
+Conectar al CJD
+ ↓
+Leer SPC/CYC/dP
+ ↓
+Determinar curva
+ ↓
+Leer 20 segmentos
+ ↓
+Publicar Discovery
+ ↓
+Publicar configuración
+ ↓
+Publicar curva
+ ↓
+Marcar horno ONLINE
+ ↓
+Crear CSV
+ ↓
+Comenzar monitorización
+
+26. FLUJO DURANTE LA COCCIÓN
+
+Cada segundo:
+
+Leer C9..CE
+ ↓
+PV / SV / Segmento / Estado / Tiempo
+ ↓
+Crear JSON
+ ├──→ MQTT
+ └──→ CSV
+ ↓
+Mostrar en consola
+ ↓
+Esperar hasta completar 1 segundo
+ ↓
+Repetir
+
+27. EJEMPLO DE CONSOLA
+
+17:28:36 | PV      19 °C | SV       22 °C | Seg 1 | FUNCIONANDO  | Tiempo      4 | MQTT OK
+
+28. ESTRUCTURA DEL PROGRAMA
+
+El archivo está organizado conceptualmente en:
+
+1. Importaciones
+2. Configuración Modbus
+3. Registros CJD
+4. Curvas
+5. Configuración MQTT
+6. Variables globales
+7. Funciones generales
+8. Funciones Modbus
+9. Estado del horno
+10. MQTT Status
+11. MQTT Discovery
+12. Publicación de configuración y curva
+13. Callbacks MQTT
+14. Inicialización MQTT
+15. Publicación dinámica
+16. CSV
+17. Inicialización del horno
+18. Monitorización
+19. Cierre
+20. main()
+
+29. PARÁMETROS PRINCIPALES MODIFICABLES
+
+PUERTO = /dev/ttyUSB0 → puerto serie.
+MODBUS_ID = 1 → dirección del CJD.
+BAUDRATE = 9600 → velocidad.
+MODBUS_TIMEOUT = 2 → timeout.
+MODBUS_RECONNECT_INTERVAL = 5.0 → intervalo de recuperación.
+FALLOS_ANTES_OFFLINE = 3 → fallos consecutivos para offline.
+INTERVALO_LECTURA = 1.0 → periodo de adquisición.
+
+30. RESUMEN DE FRECUENCIAS
+
+Configuración → una vez al arrancar.
+Curva → una vez al arrancar.
+PV → cada segundo.
+SV → cada segundo.
+Segmento → cada segundo.
+Estado → cada segundo.
+Tiempo CJD → cada segundo.
+CSV → cada segundo.
+MQTT dinámico → cada segundo.
+Reintento Modbus tras pérdida → cada 5 segundos.
+
+31. INFORMACIÓN ALMACENADA
+
+En el horno:
+Curva, configuración, PV, SV, estado y tiempo.
+
+En el ordenador:
+cocciones/*.csv
+
+En MQTT/Home Assistant:
+PV, SV, segmento, estado, tiempo, curva, configuración y disponibilidad.
+
+32. VENTAJA DEL CSV
+
+MQTT está pensado principalmente para comunicación en tiempo real. El CSV proporciona una copia histórica local independiente de Home Assistant.
+
+Después de varias cocciones puede haber, por ejemplo:
+
+cocciones/
+├── 2026-09-25_07-33-40_curva_1.csv
+├── 2026-09-26_09-15-22_curva_1.csv
+└── 2026-09-27_16-02-11_curva_2.csv
+
+Esto permite analizar posteriormente las cocciones incluso si MQTT o Home Assistant no están disponibles.
+
+33. SEGURIDAD RESPECTO AL HORNO
+
+La V3.4.2 funciona en modo SOLO LECTURA. Utiliza operaciones de lectura Modbus y no contiene operaciones destinadas a modificar los registros del CJD-9000P.
+
+34. EXPLICACIÓN BREVE PARA LA PRESENTACIÓN
+
+El CJD-9000P controla el horno y mantiene sus datos internamente. El programa Python se comunica con él mediante Modbus RTU a través de RS485. Al iniciar, obtiene la configuración y la curva seleccionada y, posteriormente, realiza una lectura de los parámetros dinámicos cada segundo. Estos datos se almacenan simultáneamente en un archivo CSV y se publican mediante MQTT. Home Assistant recibe los datos a través del broker MQTT y crea automáticamente las entidades mediante MQTT Discovery. El sistema también controla la disponibilidad del horno, detectando pérdidas de comunicación y realizando intentos automáticos de recuperación.
+
+35. DIAGRAMA COMPLETO
+
+                         CJD-9000P
+                              │
+                            RS485
+                              │
+                              ▼
+                       DSD TECH SH-U11F
+                              │
+                        /dev/ttyUSB0
+                              │
+                              ▼
+                     PYTHON V3.4.2
+                       │         │
+                       │         └──→ CSV local
+                       │
+                       └────────────→ MQTT
+                                      │
+                                      ▼
+                               BROKER MQTT
+                              192.168.1.107
+                                      │
+                                      ▼
+                               HOME ASSISTANT
+
+36. CONCLUSIÓN
+
+La V3.4.2 constituye una arquitectura completa de adquisición y monitorización IoT:
+
+CJD-9000P → Modbus → Python → CSV + MQTT → Home Assistant
+
+Cada parte tiene una función diferenciada:
+
+Modbus → obtiene información del horno.
+Python → procesa y organiza la información.
+CSV → conserva el histórico.
+MQTT → transporta los datos por la red.
+MQTT Discovery → crea automáticamente las entidades.
+Home Assistant → visualiza y utiliza los datos.
+Disponibilidad → distingue fallo del horno y fallo MQTT.
+Recuperación automática → intenta restablecer la comunicación.
+LWT → protege frente a una caída inesperada del programa.
+Cierre limpio → deja los estados correctamente actualizados.
+
+La separación entre CURVA, SV y PV deja preparada la arquitectura para una evolución posterior en la que se pueda comparar gráficamente la curva programada con la consigna y con la temperatura real segundo a segundo.
+
+FIN DEL MANUAL

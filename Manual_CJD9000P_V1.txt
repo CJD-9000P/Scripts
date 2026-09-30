@@ -1,0 +1,607 @@
+============================================================
+        MANUAL DEL PROGRAMA CJD-9000P LOGGER
+============================================================
+
+Programa:
+    cjd_logger.py
+
+Objetivo:
+    Leer y registrar los datos de un programador de horno
+    CJD-9000P mediante RS485 / Modbus RTU utilizando una
+    Raspberry Pi/Portatil/MiniPC y un adaptador USB-RS485 DSD TECH SH-U11F.
+
+IMPORTANTE:
+    Este programa está diseñado para trabajar SOLO EN LECTURA.
+
+    NO escribe datos en el CJD-9000P.
+    NO modifica temperaturas.
+    NO modifica programas.
+    NO modifica segmentos.
+    NO modifica parámetros del horno.
+
+    Utiliza exclusivamente la función Modbus 03H (Read Register).
+
+
+============================================================
+1. EQUIPO UTILIZADO
+============================================================
+
+Programador:
+    CJD-9000P
+
+Interfaz de comunicación:
+    RS485
+
+Protocolo:
+    MODBUS-RTU
+
+Adaptador USB-RS485:
+    DSD TECH SH-U11F
+
+Ordenador:
+    Raspberry Pi/Portatil/MiniPC
+
+Programa:
+    Python 3
+
+Biblioteca:
+    pymodbus
+
+
+============================================================
+2. CONEXION FISICA
+============================================================
+
+Conectar el CJD-9000P al adaptador SH-U11F:
+
+    CJD-9000P             SH-U11F
+
+    Pin 4  A  ----------  A+ / TXD+
+    Pin 5  B  ----------  B- / TXD-
+
+Para la primera instalación se utilizan únicamente estos
+dos conductores.
+
+No conectar otros terminales del programador al adaptador.
+
+El SH-U11F es un adaptador RS485 aislado.
+
+
+============================================================
+3. PARAMETROS DE COMUNICACION
+============================================================
+
+Configuración utilizada inicialmente por el programa:
+
+    Dirección Modbus:    1
+    Velocidad:           9600 baudios
+    Bits de datos:       8
+    Paridad:             Ninguna
+    Bits de parada:      2
+
+Formato:
+
+    8N2
+
+Estos valores corresponden a la configuración prevista para
+el CJD-9000P.
+
+Si posteriormente se comprueba que la configuración del
+programador es diferente, hay que modificar los valores del
+programa para que coincidan.
+
+
+============================================================
+4. INSTALACION DE PYTHON Y PYMODBUS
+============================================================
+
+En la Raspberry Pi:
+
+    sudo apt update
+
+Después:
+
+    sudo apt install python3-pip
+
+Instalar pymodbus:
+
+    pip3 install pymodbus
+
+Comprobar que el adaptador USB aparece conectado:
+
+    ls /dev/ttyUSB*
+
+Normalmente aparecerá algo como:
+
+    /dev/ttyUSB0
+
+Si aparece otro número, por ejemplo:
+
+    /dev/ttyUSB1
+
+hay que modificar en el programa:
+
+    PUERTO = "/dev/ttyUSB0"
+
+por:
+
+    PUERTO = "/dev/ttyUSB1"
+
+
+============================================================
+5. EJECUTAR EL PROGRAMA
+============================================================
+
+Guardar el programa como:
+
+    cjd_logger.py
+
+Ejecutar:
+
+    python3 cjd_logger.py
+
+
+============================================================
+6. FUNCIONAMIENTO GENERAL
+============================================================
+
+El programa realiza las siguientes operaciones:
+
+    1. Abre el puerto serie.
+    2. Se conecta al CJD-9000P mediante Modbus RTU.
+    3. Lee la configuración de la curva.
+    4. Lee los 20 segmentos de la curva.
+    5. Muestra los segmentos en pantalla.
+    6. Lee el estado actual del horno.
+    7. Espera confirmación para comenzar el registro.
+    8. Registra la temperatura cada segundo.
+    9. Cada 30 segundos registra:
+           - segmento actual
+           - estado del horno
+           - tiempo transcurrido
+   10. Guarda todos los datos en un archivo CSV.
+   11. Permite detener el registro mediante CTRL+C.
+   12. Cierra correctamente el archivo y la conexión.
+
+
+============================================================
+7. DATOS DE LA CURVA
+============================================================
+
+El CJD-9000P dispone de cuatro curvas.
+
+Cada curva contiene 20 segmentos.
+
+Cada segmento tiene dos registros:
+
+    C = valor programado
+    t = tiempo programado
+
+La distribución de registros es:
+
+    CURVA 1
+        00H - 27H
+
+    CURVA 2
+        28H - 4FH
+
+    CURVA 3
+        50H - 77H
+
+    CURVA 4
+        78H - 9FH
+
+
+La primera curva contiene:
+
+    00H  C01
+    01H  t01
+    02H  C02
+    03H  t02
+    04H  C03
+    05H  t03
+       ...
+    26H  C20
+    27H  t20
+
+
+La segunda curva comienza en 28H.
+
+La tercera curva comienza en 50H.
+
+La cuarta curva comienza en 78H.
+
+
+============================================================
+8. CONFIGURACION QUE LEE AL INICIO
+============================================================
+
+El programa lee:
+
+    A0H = SPC
+          Selección de curva
+
+    A1H = CYC
+          Número de ciclos
+
+    A3H = dP
+          Posición decimal
+
+
+IMPORTANTE:
+
+El manual de comunicación no explica completamente en estas
+páginas cómo debe aplicarse dP para convertir todos los valores.
+
+Por este motivo el programa muestra inicialmente los valores
+recibidos sin hacer una conversión que no esté confirmada.
+
+
+============================================================
+9. INFORMACION DURANTE LA COCCION
+============================================================
+
+El programa utiliza los siguientes registros:
+
+    C9H = Segmento actual
+
+    CAH = Estado del instrumento
+
+    CCH = Tiempo ya transcurrido
+
+    CDH = PV
+          Valor medido / temperatura actual
+
+    CEH = SV
+          Valor de consigna / temperatura programada
+
+
+============================================================
+10. ESTADOS DEL HORNO
+============================================================
+
+El registro CAH indica:
+
+    0 = PARADO
+
+    1 = FUNCIONANDO
+
+    2 = PAUSADO
+
+
+============================================================
+11. FRECUENCIA DE LECTURA
+============================================================
+
+TEMPERATURA:
+
+    Cada 1 segundo
+
+Se leen:
+
+    CDH = PV
+    CEH = SV
+
+
+INFORMACION DEL CICLO:
+
+    Cada 30 segundos
+
+Se leen:
+
+    C9H = segmento actual
+    CAH = estado
+    CCH = tiempo transcurrido
+
+
+El programa no necesita calcular en qué segmento está el
+horno.
+
+El propio CJD-9000P proporciona esta información mediante
+el registro C9H.
+
+
+============================================================
+12. ARCHIVOS DE REGISTRO
+============================================================
+
+El programa crea automáticamente una carpeta:
+
+    cocciones
+
+
+Dentro de ella crea un archivo nuevo para cada registro.
+
+Ejemplo:
+
+    cocciones/
+    2026-09-21_08-15-32_curva_1.csv
+
+
+El nombre contiene:
+
+    fecha
+    hora de inicio
+    número de curva
+
+
+============================================================
+13. FORMATO DEL ARCHIVO CSV
+============================================================
+
+El archivo contiene las siguientes columnas:
+
+    fecha
+    hora
+    PV
+    SV
+    segmento
+    estado
+    tiempo_CJD
+
+
+Ejemplo:
+
+    fecha;hora;PV;SV;segmento;estado;tiempo_CJD
+
+    2026-09-21;08:17:23;524.0;550.0;3;1;114
+    2026-09-21;08:17:24;525.0;550.0;3;1;115
+    2026-09-21;08:17:25;526.0;550.0;3;1;116
+
+
+Interpretación:
+
+    PV:
+        Temperatura/valor medido por el CJD.
+
+    SV:
+        Temperatura/valor de consigna.
+
+    segmento:
+        Segmento del programa en el que está el CJD.
+
+    estado:
+        0 = parado
+        1 = funcionando
+        2 = pausado
+
+    tiempo_CJD:
+        Tiempo transcurrido indicado por el propio CJD.
+
+
+============================================================
+14. SEGURIDAD: SOLO LECTURA
+============================================================
+
+Este punto es MUY IMPORTANTE.
+
+El programa utiliza:
+
+    Modbus 03H - Read Register
+
+NO utiliza:
+
+    Modbus 10H - Write Multiple Registers
+
+
+Por tanto, el programa no contiene instrucciones destinadas
+a modificar los registros del CJD.
+
+No se escriben:
+
+    temperaturas
+    tiempos
+    segmentos
+    curvas
+    parámetros
+    estados
+    configuración
+
+
+============================================================
+15. CTRL+C
+============================================================
+
+Durante una cocción el programa muestra:
+
+    Pulsa CTRL+C para terminar.
+
+
+Al pulsar:
+
+    CTRL+C
+
+
+el programa:
+
+    - detiene el registro
+    - cierra el archivo CSV
+    - cierra la conexión Modbus
+    - termina correctamente
+
+
+============================================================
+16. ESCALA DE TEMPERATURA
+============================================================
+
+En el programa existe:
+
+    ESCALA_TEMPERATURA = 1.0
+
+
+Inicialmente se deja en 1.0 porque hay que comprobar cómo
+está configurada la posición decimal del CJD.
+
+Por ejemplo:
+
+Si el CJD muestra:
+
+    523 °C
+
+y Modbus devuelve:
+
+    523
+
+entonces:
+
+    ESCALA_TEMPERATURA = 1.0
+
+
+Si el CJD muestra:
+
+    523.4 °C
+
+y Modbus devuelve:
+
+    5234
+
+entonces podría ser necesario utilizar:
+
+    ESCALA_TEMPERATURA = 0.1
+
+
+NO modificar este valor hasta comprobarlo con una lectura real.
+
+
+============================================================
+17. PRIMERA PRUEBA
+============================================================
+
+La primera vez NO es recomendable utilizarlo directamente
+durante una cocción importante.
+
+Primero:
+
+    0. IMPORTANTE, ANTES DE CONECTAR E INCLUSO ABRIR LA TAPA DEL PROGRAMADOR DEL HORNO, DESCONECTAR LA CORRIENTE DEL MAGNETOTERMICO. 
+    1. Conectar el SH-U11F a la Raspberry/Portatil/MiniPC.
+    2. Comprobar que aparece /dev/ttyUSB0.
+    3. Conectar A y B. CON EL HORNO APAGADO, UNA VEZ CONEXIONADO ENCENDER EL MAGNETOTERMICO.
+    4. Ejecutar el programa.
+    5. Comprobar que puede leer los registros.
+    6. Comparar PV con la temperatura que muestra el CJD.
+    7. Comprobar el segmento actual.
+    8. Comprobar el estado.
+    9. Comprobar el tiempo.
+   10. Comprobar el formato de los 20 segmentos.
+
+
+============================================================
+18. SI NO HAY COMUNICACION
+============================================================
+
+Comprobar en este orden:
+
+    1. Cable USB del SH-U11F.
+    2. Puerto /dev/ttyUSB0.
+    3. Conexión A-B.
+    4. CJD pin 4 = A.
+    5. CJD pin 5 = B.
+    6. Dirección Modbus.
+    7. Velocidad.
+    8. Formato 8N2.
+    9. Alimentación del CJD.
+   10. Que el adaptador sea realmente el SH-U11F.
+
+
+Si el puerto es diferente:
+
+    ls /dev/ttyUSB*
+
+y modificar:
+
+    PUERTO = "/dev/ttyUSB0"
+
+
+============================================================
+19. SI LOS VALORES PARECEN EXTRAÑOS
+============================================================
+
+NO escribir ningún registro para intentar corregirlos.
+
+Primero comprobar:
+
+    - dirección Modbus
+    - velocidad
+    - formato 8N2
+    - posición decimal dP
+    - escala de temperatura
+    - unidades del tiempo
+
+Los registros son valores enteros de 16 bits.
+
+El manual indica que los valores de comunicación tienen rango:
+
+    -32768 a 32767
+
+
+============================================================
+20. REGISTROS IMPORTANTES
+============================================================
+
+REGISTRO
+
+HEX         DEC     FUNCION
+------------------------------------------------
+
+A0H         160     Selección de curva
+A1H         161     Número de ciclos
+A3H         163     Posición decimal
+
+BFH         191     Dirección de comunicación
+C0H         192     Velocidad de comunicación
+
+C9H         201     Segmento actual
+CAH         202     Estado actual
+CBH         203     Autotuning / control manual
+CCH         204     Tiempo transcurrido
+CDH         205     PV - valor medido
+CEH         206     SV - valor de consigna
+
+
+============================================================
+21. OBJETIVO FUTURO DEL PROGRAMA
+============================================================
+
+Una vez comprobado que todas las lecturas son correctas,
+el archivo CSV permitirá reconstruir la cocción completa.
+
+Con esos datos se podrá posteriormente generar:
+
+    - gráfica de temperatura
+    - curva real de cocción
+    - curva programada
+    - cambios de segmento
+    - duración de cada segmento
+    - pausas
+    - temperatura máxima
+    - diferencias entre PV y SV
+    - historial de diferentes cocciones
+
+
+============================================================
+22. IMPORTANTE SOBRE ESTE MANUAL
+============================================================
+
+Este programa se ha realizado a partir del mapa de registros
+del manual de comunicación del CJD-9000P.
+
+Hay algunos detalles que deben comprobarse con una lectura
+real del aparato antes de considerar definitivas las
+conversiones de unidades:
+
+    - posición decimal de PV/SV
+    - unidades exactas de los tiempos de los segmentos
+    - codificación exacta de SPC
+    - interpretación completa de algunos parámetros
+
+
+NO se deben asumir estas conversiones sin comprobarlas.
+
+El objetivo inicial es conseguir una comunicación estable,
+SOLO DE LECTURA, y comprobar los valores reales que entrega
+el CJD-9000P.
+
+
+============================================================
+FIN DEL MANUAL
+============================================================
